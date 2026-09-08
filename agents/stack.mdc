@@ -1,0 +1,42 @@
+---
+description: "Canonical stack, repo layout, and conventions for this codebase. Postgres is the only datastore."
+alwaysApply: true
+---
+
+# Stack
+
+TypeScript end to end. Node 22 LTS. pnpm workspaces + Turborepo. **Postgres is the only datastore** - no Redis, no Kafka, no Elasticsearch, no Mongo. Anything that would normally reach for one of those uses a Postgres feature instead.
+
+| Layer | Choice | Why this one |
+|---|---|---|
+| Frontend | Next.js App Router, React, Tailwind v4, shadcn/ui | Server components keep data fetching next to the DB; shadcn is source-in-repo so agents can edit primitives instead of fighting a package |
+| API | Hono + `@hono/zod-openapi` | Contract-first. The route *is* the Zod schema, and the OpenAPI doc falls out of it - that generated contract is what the reviewer verifies against |
+| Shared types | `packages/contract` - Zod schemas + inferred types + generated OpenAPI | One artifact both sides bind to; drift becomes a typecheck failure, not a runtime surprise |
+| DB access | Drizzle ORM + drizzle-kit | Migrations are plain, reviewable `.sql` files and the schema is TypeScript, not a DSL. An agent can diff and reason about both |
+| DB | Postgres 17 | |
+| Auth | Better Auth | Sessions and users live in your Postgres tables |
+| Background jobs | **pg-boss** | Postgres-backed queue: retries, scheduling, dead-letter, no Redis |
+| Realtime | `LISTEN/NOTIFY` -> SSE | No pub/sub broker |
+| Cache / rate limit | Unlogged Postgres tables + in-process LRU | |
+| Search | `tsvector` + GIN; `pgvector` for embeddings | |
+| Tests | Vitest, Testcontainers (real Postgres), Playwright | Never mock the database - a Testcontainers Postgres is cheap and mocks hide constraint bugs |
+| Observability | OpenTelemetry + pino | |
+
+## Layout
+```
+apps/web            Next.js
+apps/api            Hono
+packages/contract   Zod schemas + OpenAPI (the API's source of truth)
+packages/db         Drizzle schema, migrations/*.sql, seed, query helpers
+packages/ui         shadcn primitives + design tokens
+```
+
+## Rules
+- Business logic lives in `packages/db` query modules or `apps/api` services. Route handlers parse, authorize, delegate, and serialize - nothing else.
+- Every endpoint is defined in `packages/contract` first. Handlers import the schema. No inline shapes.
+- No raw string SQL in app code except in `packages/db`, and there only via Drizzle's `sql` template.
+- Migrations are additive by default. Expand/contract for anything destructive: add, backfill, dual-write, cut over, drop in a later migration.
+- Every table: `id uuid default gen_random_uuid()`, `created_at timestptz not null default now()`, `updated_at timestptz`. FKs explicit with `on delete` chosen deliberately. Index every FK and every column in a `where` you actually run.
+- Money is `numeric`, never float. Timestamps are `timestamptz`, never `timestamp`.
+- Multi-statement writes go in a transaction. Anything that could interleave gets a uniqueness constraint, not an application-level check.
+- Pin exact versions at install time; do not hand-write version numbers from memory.

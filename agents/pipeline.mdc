@@ -1,0 +1,33 @@
+---
+description: "Attach to kick off the full-stack pipeline for a feature. Usage: @pipeline <brief>. slug=<slug>. Sets up .agent/<slug>/ and runs context-loader -> planner -> plan-verifier -> db-migrator -> implementer -> behavior-reviewer -> visual-reviewer."
+alwaysApply: false
+---
+
+# Pipeline trigger
+
+When the user attaches `@pipeline <brief>`, run the full-stack agent pack end to end for that feature. Parse the brief for a `slug=<slug>`; default to a kebab-case of the brief.
+
+## Setup
+```
+node scripts/capture.mjs --check
+mkdir -p .agent/<slug>/spec
+```
+
+## Sequence (do not collapse; each role hands off only its written artifact)
+1. **context-loader** (glm-5.2): `node scripts/introspect-db.mjs --out .agent/<slug>/schema.sql`; if a design URL is in the brief, `node scripts/capture.mjs --url <url> --out .agent/<slug> --label target`. Write `.agent/<slug>/context.md`.
+2. **planner** (swe-1.7, VISION): write `spec/data-model.md`, `spec/contract.md`, `spec/plan.md`, `spec/visual-spec.md` (if UI in scope) per `.cursor/agents/planner.md`.
+3. **plan-verifier** (swe-1.7, VISION) [GATE]: audit, write `audit-1.md`. Below 0.90 or any data-model gap -> back to planner. No code, no migration until APPROVED. Max 3 rounds.
+4. **db-migrator** (glm-5.2): if data-model changed, edit schema, generate, read SQL, apply to scratch DB, re-introspect. Expand/contract for destructive.
+5. **implementer** (glm-5.2, NO VISION): close the screenshot. Build contract package -> db queries -> Hono handlers (authz first) -> Next.js UI (every named state) -> tests against Testcontainers Postgres. Never mock the DB.
+6. **behavior-reviewer** (glm-5.2): typecheck/lint/vitest/playwright real output, OpenAPI diff, authz on every touched endpoint, EXPLAIN ANALYZE every new query. Write `review-iter-<N>.md`.
+7. **visual-reviewer** (swe-1.7, VISION, if UI in scope): `capture.mjs` the build, `diff.mjs` against target, write property deltas ranked by impact.
+
+## Routing on failure
+- implementation bug -> implementer
+- schema defect -> db-migrator
+- spec defect (code matches spec but not the target) -> planner -> plan-verifier -> implementer
+Max 3 rounds. Report final scores and residual deltas. Stop and ask the operator if a gate fails 3 times.
+
+## Constraints
+- Scraped logos, fonts, photography are reference only. Substitute project assets before shipping. Respect robots.txt and terms of service.
+- The implementer must never read a `.png`. If it reaches for the design, the spec has a hole -> back to planner.
